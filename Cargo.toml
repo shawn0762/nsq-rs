@@ -1,0 +1,26 @@
+[package]
+name = "nsq-rs"
+description = "A realtime distributed messaging platform inspired by NSQ"
+version = "0.1.0"
+authors = ["Shawn"]
+keywords = ["nsq", "message queue"]
+exclude = ["/.git/", "/ci/"]
+edition = "2021"
+rust-version = "1.83"
+
+[dependencies]
+axum = "0.7.9"
+rustls = "0.23.20"
+thiserror = "2.0.8"
+tokio = { version = "1.42.0", features = [
+    "net",
+    "macros",
+    "rt-multi-thread",
+    "bytes",
+    "tracing",
+    "signal",
+    "io-util",
+] }
+tokio-util = { version = "0.7.13", features = ["rt"] }
+tracing = "0.1.41"
+tracing-subscriber = "0.3.19"
