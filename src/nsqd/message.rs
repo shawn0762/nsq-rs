@@ -103,13 +103,17 @@ impl Message {
         })
     }
 
-    pub async fn write_to_backend<Q>(&mut self, bq: Q) -> Result<()>
+    // 将消息写入到后端队列，缓解内存压力
+    pub async fn write_to_backend<Q>(&mut self, bq: &mut Q) -> Result<()>
     where
         Q: BackEndQueue,
     {
-        // 这里要不要buf pool优化一下？
-        let buf = BufWriter::new(inner);
-        self.write_to(w);
+        // 这里要不要用buf pool优化一下？
+        let mut buf = Vec::with_capacity(MIN_VALID_MSG_LEN);
+        // 这里写入一次到buf，然后再写入一次到bq，能不能优化？
+        self.write_to(&mut buf).await?;
+
+        bq.put(buf.as_slice()).await?;
 
         Ok(())
     }
