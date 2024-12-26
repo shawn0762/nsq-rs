@@ -1,4 +1,4 @@
-use tokio::sync::broadcast;
+use tokio::sync::broadcast::{self, Sender};
 
 pub(super) struct Shutdown {
     is_shutdown: bool,
@@ -6,10 +6,10 @@ pub(super) struct Shutdown {
 }
 
 impl Shutdown {
-    pub fn new(notify: &broadcast::Sender<()>) -> Self {
+    pub fn new(notify: broadcast::Receiver<()>) -> Self {
         Self {
             is_shutdown: false,
-            notify: notify.subscribe(),
+            notify,
         }
     }
 
@@ -24,5 +24,20 @@ impl Shutdown {
 
         let _ = self.notify.recv().await;
         self.is_shutdown = true;
+    }
+}
+
+impl From<&Sender<()>> for Shutdown {
+    fn from(tx: &Sender<()>) -> Self {
+        Self::new(tx.subscribe())
+    }
+}
+
+impl Clone for Shutdown {
+    fn clone(&self) -> Self {
+        Self {
+            is_shutdown: self.is_shutdown,
+            notify: self.notify.resubscribe(),
+        }
     }
 }

@@ -2,6 +2,7 @@ use core::time;
 use std::{
     os,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 use rustls::ProtocolVersion;
@@ -18,29 +19,38 @@ pub struct Options {
     nsq_lookup_tcp_addrs: Vec<String>,
     auth_http_addrs: Vec<String>,
     auth_http_request_method: String,
-    http_client_connect_timeout: time::Duration,
-    http_client_request_timeout: time::Duration,
+    http_client_connect_timeout: Duration,
+    http_client_request_timeout: Duration,
 
     // diskqueue options
     data_path: PathBuf,
     mem_queue_size: u32,
     max_bytes_per_file: u32,
     sync_every: u32,
-    sync_timeout: time::Duration,
+    sync_timeout: Duration,
 
-    queue_scan_interval: time::Duration,
-    queue_scan_refresh_interval: time::Duration,
+    queue_scan_interval: Duration,
+    queue_scan_refresh_interval: Duration,
     queue_scan_selection_count: usize,
     queue_scan_worker_pool_max: usize,
     queue_scan_dirty_percent: f64,
 
     // msg and command options
-    msg_timeout: time::Duration,
-    max_msg_timeout: time::Duration,
+    pub msg_timeout: Duration,
+    max_msg_timeout: Duration,
     max_msg_size: u32,
     max_body_size: u32,
-    max_req_timeout: time::Duration,
-    client_timeout: time::Duration,
+    max_req_timeout: Duration,
+    pub client_timeout: Duration,
+
+    // 客户端可以更改的配置选项
+    max_heartbeat_interval: Duration,
+    max_rdy_count: i64,
+    max_output_buffer_size: i64,
+    max_output_buffer_timeout: Duration,
+    min_output_buffer_timeout: Duration,
+    pub output_buffer_timeout: Duration,
+    max_channel_consumers: isize,
 
     // TLS config
     tls_cert: PathBuf,
@@ -101,6 +111,14 @@ impl Options {
             deflate_enabled: true,
             max_deflate_level: 6,
             snappy_enabled: true,
+
+            max_heartbeat_interval: todo!(),
+            max_rdy_count: todo!(),
+            max_output_buffer_size: todo!(),
+            max_output_buffer_timeout: todo!(),
+            min_output_buffer_timeout: todo!(),
+            output_buffer_timeout: todo!(),
+            max_channel_consumers: todo!(),
         }
     }
 }

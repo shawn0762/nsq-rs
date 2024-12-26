@@ -20,8 +20,8 @@ const MIN_VALID_MSG_LEN: usize = MSG_ID_LENGTH + 8 + 2; // Timestamp + Attempts
 pub(super) type MessageID = [u8; MSG_ID_LENGTH];
 
 pub(super) struct Message {
-    id: MessageID,
-    body: Vec<u8>,
+    pub id: MessageID,
+    pub body: Vec<u8>,
 
     timestamp: i64,
     attempts: u16,

@@ -46,6 +46,9 @@ pub struct NSQD {
     notify_rx: Receiver<NotifyType>,
     // 集群信息
     // ci,
+
+    // golang中这个字段是一个原子类型
+    opts: Options,
 }
 
 impl NSQD {
@@ -71,6 +74,7 @@ impl NSQD {
             pool_size: todo!(),
             notify_tx,
             notify_rx,
+            opts,
         };
 
         (nsqd, token)
@@ -80,8 +84,8 @@ impl NSQD {
         let tracker = TaskTracker::new();
         let (tx, rx) = broadcast::channel(1);
 
-        let mut shutdown = Shutdown::new(&tx);
-        let mut shutdown2 = Shutdown::new(&tx);
+        let mut shutdown: Shutdown = (&tx).into();
+        let mut shutdown2: Shutdown = (&tx).into();
 
         // TODO: 启动tcp server
         tracker.spawn(async move {
@@ -145,6 +149,10 @@ impl NSQD {
     }
 
     pub fn stop(&mut self) {}
+
+    pub fn get_opts(&self) -> &Options {
+        &self.opts
+    }
 }
 
 pub enum NotifyType {
