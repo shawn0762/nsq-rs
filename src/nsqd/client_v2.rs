@@ -35,6 +35,7 @@ pub(super) enum State {
     Closing,
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct ClientV2 {
     id: i64,
 
@@ -191,14 +192,18 @@ struct IdentifyEvent {
     msg_timeout: Duration,
 }
 
-//
 pub(super) struct SubscriberV2 {
-    client: ClientV2,
+    client: Arc<ClientV2>,
     mem_msg_rx: async_channel::Receiver<Message>,
 }
 
 impl SubscriberV2 {
-    pub fn new(client: ClientV2, mem_msg_rx: Receiver<Message>) -> Self {
+    pub fn new(client: Arc<ClientV2>, mem_msg_rx: Receiver<Message>) -> Self {
+        client
+            .nsqd
+            .tracker()
+            .spawn(msg_handle(client.clone(), mem_msg_rx.clone()));
+
         Self { client, mem_msg_rx }
     }
 }
@@ -209,6 +214,15 @@ impl Client for SubscriberV2 {
     }
 
     fn close(&mut self) {
-        self.client.close();
+        //
+    }
+}
+
+async fn msg_handle(client: Arc<ClientV2>, mem_msg_rx: Receiver<Message>) {
+    while mem_msg_rx.is_closed() {
+        let Ok(msg) = mem_msg_rx.recv().await else {
+            break;
+        };
+        // TODO: 发送给客户端
     }
 }

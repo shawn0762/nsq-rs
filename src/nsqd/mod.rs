@@ -8,3 +8,5 @@ mod protocol_v2;
 mod shutdown;
 mod tcp_server;
 mod topic;
+
+pub use message::Message;

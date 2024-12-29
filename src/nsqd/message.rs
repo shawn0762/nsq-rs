@@ -18,10 +18,10 @@ use super::backend_queue::BackEndQueue;
 const MSG_ID_LENGTH: usize = 16;
 const MIN_VALID_MSG_LEN: usize = MSG_ID_LENGTH + 8 + 2; // Timestamp + Attempts
 
-pub(super) type MessageID = [u8; MSG_ID_LENGTH];
+pub type MessageID = [u8; MSG_ID_LENGTH];
 
-#[derive(Clone)]
-pub(super) struct Message {
+#[derive(Clone, Debug)]
+pub struct Message {
     pub id: MessageID,
     pub body: Bytes,
 
@@ -84,14 +84,14 @@ impl Message {
     //	                       (uint16)
     //	                        2-byte
     //	                       attempts
-    pub fn decode(b: &[u8]) -> Result<Message> {
+    pub fn decode(b: Bytes) -> Result<Message> {
         if b.len() < MIN_VALID_MSG_LEN {
             return Err(NsqError::InvalidMsgLength);
         }
         let timestamp = u64::from_be_bytes(b[..8].try_into().unwrap()) as i64;
         let attempts = u16::from_be_bytes(b[8..10].try_into().unwrap());
         let id = b[10..10 + MSG_ID_LENGTH].try_into().unwrap();
-        let body = b[10 + MSG_ID_LENGTH..].try_into().unwrap();
+        let body = b.slice(10..MSG_ID_LENGTH);
         Ok(Message {
             id,
             body,

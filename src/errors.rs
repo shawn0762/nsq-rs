@@ -2,13 +2,18 @@ use std::io;
 
 use thiserror::Error;
 
+use crate::nsqd::Message;
+
 #[derive(Error, Debug)]
-pub enum NsqError<T> {
+pub enum NsqError {
     #[error("IO error")]
     IoError(#[from] io::Error),
 
-    #[error("Invalid message size")]
-    AsyncChannelSendError(#[from] async_channel::SendError<T>),
+    #[error("Async channel send error")]
+    AsyncChannelSendError(Message),
+
+    #[error("Failed to send msgs to topic")]
+    TopicMsgSendError(Message),
 
     #[error("Invalid message size")]
     InvalidMsgLength,

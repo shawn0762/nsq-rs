@@ -6,9 +6,14 @@ use std::{
     },
 };
 
+use async_channel::{SendError, Sender};
 use dashmap::DashMap;
-use tokio::select;
-use tracing::{error, info};
+use tokio::{
+    select,
+    sync::broadcast::{self, error::RecvError, Receiver},
+};
+use tokio_util::task::{task_tracker, TaskTracker};
+use tracing::{debug, error, info};
 
 use crate::{common::Result, errors::NsqError};
 
@@ -16,6 +21,7 @@ use super::{
     client_v2::{Client, ClientV2, SubscriberV2},
     message::Message,
     nsqd::NSQD,
+    shutdown::Shutdown,
 };
 
 pub struct Channel {
@@ -33,11 +39,21 @@ pub struct Channel {
     clients: DashMap<i64, SubscriberV2>,
 
     exit_flag: AtomicBool,
+    task_tracker: TaskTracker,
 }
 
 impl Channel {
-    pub fn new(name: String, nsqd: Arc<NSQD>) -> Self {
+    pub fn new(name: String, nsqd: Arc<NSQD>, mut topic_msg_rx: Receiver<Message>) -> Self {
         let (mem_msg_tx, mem_msg_rx) = async_channel::bounded(nsqd.get_opts().mem_queue_size);
+        let task_tracker = TaskTracker::new();
+        let exit_flag = AtomicBool::new(false);
+
+        task_tracker.spawn(recv_from_topin(
+            topic_msg_rx,
+            mem_msg_tx.clone(),
+            mem_msg_rx.clone(),
+        ));
+
         Self {
             name,
             requeue_count: 0.into(),
@@ -47,11 +63,12 @@ impl Channel {
             mem_msg_tx,
             mem_msg_rx,
             clients: DashMap::new(),
-            exit_flag: false.into(),
+            exit_flag,
+            task_tracker,
         }
     }
 
-    pub fn add_client(&mut self, c: ClientV2) -> Result<()> {
+    pub fn add_client(&mut self, c: Arc<ClientV2>) -> Result<()> {
         // 当客户端开始订阅时，将转换成SucScriber，此后只能进行订阅相关的操作
 
         if self.exiting() {
@@ -71,6 +88,10 @@ impl Channel {
         self.clients
             .insert(id, SubscriberV2::new(c, self.mem_msg_rx.clone()));
         Ok(())
+    }
+
+    pub fn close(&mut self) {
+        // TODO:
     }
 
     pub fn exit(&mut self, deleted: bool) -> Result<()> {
@@ -109,26 +130,39 @@ impl Channel {
     pub fn exiting(&mut self) -> bool {
         self.exit_flag.load(Ordering::SeqCst) == true
     }
+}
 
-    pub async fn put_msg(&mut self, msg: Message) -> Result<()> {
-        if self.exiting() {
-            return Err(NsqError::Exiting);
+async fn recv_from_topin(
+    mut topic_msg_rx: broadcast::Receiver<Message>,
+    channel_msg_tx: async_channel::Sender<Message>,
+    channel_msg_rx: async_channel::Receiver<Message>,
+) {
+    loop {
+        select! {
+            // 广播通道无法收回通道中的消息，所以只能等到通道关闭，
+            // 确保已经收到所有消息
+            ret = topic_msg_rx.recv() => {
+                match ret {
+                    Ok(msg) => {
+                        channel_msg_tx.send(msg).await;
+                        // TODO: 如果通道满了，要落盘
+                    },
+                    Err(RecvError::Lagged(num)) => {
+                        error!("Receive lagged, {num} messages was missed");
+                    },
+                    Err(RecvError::Closed) => {
+                        // TODO: Topic已关闭，channel也要开始退出
+                        break;
+                    }
+                };
+            },
         }
-
-        self.put(msg).await?;
-
-        self.msg_count.fetch_add(1, Ordering::SeqCst);
-
-        Ok(())
     }
 
-    async fn put(&mut self, msg: Message) -> Result<()> {
-        select! {
-            ret = self.mem_msg_tx.send(msg) => ret,
-            else => {
-                // TODO: writeMessageToBackend
-                Err(NsqError::DiskQueueNotImplement)
-            }
-        }
+    // TODO: 通知客户端退出
+    channel_msg_tx.close();
+
+    while let Ok(msg) = channel_msg_rx.recv().await {
+        //TODO: 将channel_msg_rx中剩余的消息落盘
     }
 }
