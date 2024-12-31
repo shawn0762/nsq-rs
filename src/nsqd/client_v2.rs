@@ -35,7 +35,15 @@ pub(super) enum State {
     Closing,
 }
 
-#[derive(Clone, Copy)]
+// Client持有TcpStream，所以至少有三个地方需要持有Client，
+// 一是tcp server，需要直接与客户端通信（读写）
+//      所有client：
+//          发送心跳
+//          
+//      非订阅client：接收命令、发送响应
+// 一是Channel，需要维护订阅关系（读）
+// 一是需要不断向客户端发送消息，并接收结果（写）
+//      RDY FIN REQ CLS 
 pub(super) struct ClientV2 {
     id: i64,
 
@@ -193,16 +201,13 @@ struct IdentifyEvent {
 }
 
 pub(super) struct SubscriberV2 {
-    client: Arc<ClientV2>,
+    client: ClientV2,
     mem_msg_rx: async_channel::Receiver<Message>,
 }
 
 impl SubscriberV2 {
-    pub fn new(client: Arc<ClientV2>, mem_msg_rx: Receiver<Message>) -> Self {
-        client
-            .nsqd
-            .tracker()
-            .spawn(msg_handle(client.clone(), mem_msg_rx.clone()));
+    pub fn new(client: ClientV2, mem_msg_rx: Receiver<Message>) -> Self {
+        client.nsqd.tracker().spawn(msg_handle(mem_msg_rx.clone()));
 
         Self { client, mem_msg_rx }
     }
@@ -218,7 +223,7 @@ impl Client for SubscriberV2 {
     }
 }
 
-async fn msg_handle(client: Arc<ClientV2>, mem_msg_rx: Receiver<Message>) {
+async fn msg_handle(mem_msg_rx: Receiver<Message>) {
     while mem_msg_rx.is_closed() {
         let Ok(msg) = mem_msg_rx.recv().await else {
             break;

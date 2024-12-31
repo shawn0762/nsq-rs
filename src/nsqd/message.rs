@@ -4,7 +4,6 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
 use bytes::Bytes;
-use tokio::io::AsyncWrite;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufWriter;
 
@@ -13,9 +12,7 @@ use crate::errors::NsqError;
 
 use super::backend_queue::BackEndQueue;
 
-// use tokio::time::Instant;
-
-const MSG_ID_LENGTH: usize = 16;
+pub const MSG_ID_LENGTH: usize = 16;
 const MIN_VALID_MSG_LEN: usize = MSG_ID_LENGTH + 8 + 2; // Timestamp + Attempts
 
 pub type MessageID = [u8; MSG_ID_LENGTH];
