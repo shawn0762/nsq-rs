@@ -1,19 +1,15 @@
-use std::{
-    collections::HashMap,
-    sync::{
-        atomic::{AtomicBool, AtomicU64, Ordering},
-        Arc, Mutex,
-    },
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc,
 };
 
-use async_channel::{SendError, Sender};
 use dashmap::DashMap;
 use tokio::{
     select,
     sync::broadcast::{self, error::RecvError, Receiver},
 };
-use tokio_util::task::{task_tracker, TaskTracker};
-use tracing::{debug, error, info};
+use tokio_util::task::TaskTracker;
+use tracing::{error, info};
 
 use crate::{common::Result, errors::NsqError};
 
@@ -21,7 +17,6 @@ use super::{
     client_v2::{Client, ClientV2, SubscriberV2},
     message::Message,
     nsqd::NSQD,
-    shutdown::Shutdown,
 };
 
 pub struct Channel {
@@ -36,14 +31,19 @@ pub struct Channel {
     mem_msg_tx: async_channel::Sender<Message>,
     mem_msg_rx: async_channel::Receiver<Message>,
 
-    clients: DashMap<i64, SubscriberV2>,
+    clients: DashMap<i64, Box<dyn Client>>,
 
     exit_flag: AtomicBool,
     task_tracker: TaskTracker,
 }
 
 impl Channel {
-    pub fn new(name: String, nsqd: Arc<NSQD>, mut topic_msg_rx: Receiver<Message>) -> Self {
+    pub fn new(
+        name: String,
+        nsqd: Arc<NSQD>,
+        mut topic_msg_rx: Receiver<Message>,
+        client: impl Client,
+    ) -> Self {
         let (mem_msg_tx, mem_msg_rx) = async_channel::bounded(nsqd.get_opts().mem_queue_size);
         let task_tracker = TaskTracker::new();
         let exit_flag = AtomicBool::new(false);
@@ -54,6 +54,9 @@ impl Channel {
             mem_msg_rx.clone(),
         ));
 
+        let clients = DashMap::new();
+        clients.insert(client.id(), client);
+
         Self {
             name,
             requeue_count: 0.into(),
@@ -62,7 +65,7 @@ impl Channel {
             nsqd,
             mem_msg_tx,
             mem_msg_rx,
-            clients: DashMap::new(),
+            clients,
             exit_flag,
             task_tracker,
         }

@@ -34,10 +34,9 @@ pub struct Message {
 
 impl Message {
     pub fn new(id: MessageID, body: Bytes) -> Self {
-        // 这里不存在panic的情况；
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap() // 这里不可能panic
+            .unwrap()
             .as_nanos() as i64;
         Self {
             id,
@@ -58,7 +57,6 @@ impl Message {
     {
         let mut buf_writer = BufWriter::new(w);
 
-        // 采用大端序
         buf_writer.write_u64(self.timestamp as u64).await?;
         buf_writer.write_u16(self.attempts).await?;
         let mut total = 10;

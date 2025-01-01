@@ -1,6 +1,9 @@
 use std::{
     collections::HashMap,
-    sync::atomic::{AtomicBool, AtomicI64},
+    sync::{
+        atomic::{AtomicBool, AtomicI64},
+        Arc,
+    },
     time::{self, Duration, Instant},
 };
 
@@ -20,7 +23,13 @@ use tracing::{debug, info, warn};
 
 use crate::{common::Result, nsqd::shutdown::Shutdown};
 
-use super::{channel::Channel, options::Options, topic::Topic};
+use super::{
+    channel::Channel,
+    client_v2::Client,
+    command::{ChannelName, TopicName},
+    options::Options,
+    topic::Topic,
+};
 
 pub struct NSQD {
     client_id_seq: AtomicI64,
@@ -172,6 +181,22 @@ impl NSQD {
     pub fn shutdown_rx(&self) -> Shutdown {
         self.shutdown_rx.clone()
     }
+}
+
+pub fn add_client(
+    nsqd: Arc<NSQD>,
+    topic_name: TopicName,
+    channel_name: ChannelName,
+    c: impl Client,
+) -> Result<()> {
+    let topic = nsqd
+        .topic_map
+        .entry(topic_name.clone())
+        .or_insert_with(move || Topic::new(topic_name, nsqd));
+
+    topic.add_client();
+
+    Ok(())
 }
 
 pub enum NotifyType {

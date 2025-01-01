@@ -10,7 +10,7 @@ use tracing::{debug, error};
 
 use crate::{common::Result, errors::NsqError};
 
-use super::{channel::Channel, message::Message, nsqd::NSQD};
+use super::{channel::Channel, client_v2::Client, message::Message, nsqd::NSQD};
 
 pub(super) struct Topic {
     name: String,
@@ -38,7 +38,7 @@ impl Topic {
         }
     }
 
-    pub fn add_channel(&mut self, name: String) -> Result<()> {
+    pub fn add_channel(&mut self, name: String, client: impl Client) -> Result<()> {
         if self.channel_map.contains_key(&name) {
             return Ok(());
         }

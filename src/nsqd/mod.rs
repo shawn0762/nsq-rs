@@ -7,6 +7,7 @@ mod message;
 mod nsqd;
 mod options;
 mod protocol_v2;
+mod response;
 mod shutdown;
 mod tcp_server;
 mod topic;

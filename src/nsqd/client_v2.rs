@@ -10,21 +10,28 @@ use std::{
 
 use async_channel::Receiver;
 use tokio::{
-    io::{BufReader, BufWriter},
+    io::{AsyncWriteExt, BufReader, BufWriter},
     net::{
         tcp::{ReadHalf, WriteHalf},
         TcpStream,
     },
+    select,
     sync::{mpsc, oneshot},
+    time::{self, Interval},
 };
 
-use super::{channel::Channel, message::Message, nsqd::NSQD, shutdown::Shutdown};
+use crate::nsqd::command::FrameSub;
+
+use super::{channel::Channel, command::Frame, message::Message, nsqd::NSQD, shutdown::Shutdown};
+use async_trait::async_trait;
 
 const DEFAULT_BUF_SIZE: i32 = 16 * 1024;
 
+#[async_trait]
 pub(super) trait Client {
     fn id(&self) -> i64;
     fn close(&mut self);
+    async fn serve(&mut self);
 }
 
 pub(super) enum State {
@@ -39,21 +46,13 @@ pub(super) enum State {
 // 一是tcp server，需要直接与客户端通信（读写）
 //      所有client：
 //          发送心跳
-//          
+//
 //      非订阅client：接收命令、发送响应
 // 一是Channel，需要维护订阅关系（读）
 // 一是需要不断向客户端发送消息，并接收结果（写）
-//      RDY FIN REQ CLS 
+//      RDY FIN REQ CLS
 pub(super) struct ClientV2 {
     id: i64,
-
-    ready_count: AtomicI64,
-    in_flight_count: AtomicI64,
-    message_count: AtomicU64,
-    finish_count: AtomicU64,
-    requeue_count: AtomicU64,
-
-    pub_counts: HashMap<String, AtomicU64>,
 
     // TODO: 需要锁？
     //      writeLock
@@ -73,8 +72,6 @@ pub(super) struct ClientV2 {
 
     state: State,
     connect_time: Instant,
-
-    channel: Option<Channel>,
 
     ready_state_tx: mpsc::Sender<isize>,
     ready_state_rx: mpsc::Receiver<isize>,
@@ -114,12 +111,7 @@ impl ClientV2 {
 
         Self {
             id,
-            ready_count: AtomicI64::new(0),
-            in_flight_count: AtomicI64::new(0),
-            message_count: AtomicU64::new(0),
-            finish_count: AtomicU64::new(0),
-            requeue_count: AtomicU64::new(0),
-            pub_counts: HashMap::new(),
+
             nsqd: nsqd.clone(),
             user_agent: None,
             stream,
@@ -129,7 +121,6 @@ impl ClientV2 {
             msg_timeout: opts.msg_timeout,
             state: State::Init,
             connect_time: Instant::now(),
-            channel: None,
             ready_state_tx,
             ready_state_rx,
             // shutdown: todo!(),
@@ -153,7 +144,124 @@ impl ClientV2 {
     }
 }
 
-impl ClientV2 {
+#[async_trait]
+impl Client for ClientV2 {
+    fn id(&self) -> i64 {
+        self.id
+    }
+    fn close(&mut self) {
+        todo!()
+    }
+
+    async fn serve(&mut self) {
+        let (read, write) = self.stream.split();
+        let mut ticker = time::interval(self.heartbeat_interval);
+
+        let mut buf_reader = BufReader::new(read);
+        let mut buf_writer = BufWriter::new(write);
+        loop {
+            select! {
+                f = Frame::parse(&mut buf_reader) => match f {
+                    Ok(f) => match f {
+                        Frame::AUTH(bytes) => todo!(),
+                        Frame::PUB(_, bytes) => todo!(),
+                        Frame::DPUB(_, duration, bytes) => todo!(),
+                        Frame::MPUB(_, vec) => todo!(),
+                        Frame::SUB(topic, channel) => {
+                            todo!()
+                        },
+                        Frame::NOP => todo!(),
+                    },
+                    Err(_) => {},
+                },
+                _ = ticker.tick() => {
+                    // TODO: 发送完整的心跳包
+                    buf_writer.write(b"_heartbeat_").await;
+                    buf_writer.flush().await;
+                }
+            }
+        }
+    }
+}
+
+struct IdentifyEvent {
+    output_buffer_timeout: Duration,
+    heartbeat_interval: Duration,
+    sample_rate: i32,
+    msg_timeout: Duration,
+}
+
+pub(super) struct SubscriberV2 {
+    client: ClientV2,
+    mem_msg_rx: async_channel::Receiver<Message>,
+
+    ready_count: AtomicI64,
+    in_flight_count: AtomicI64,
+    message_count: AtomicU64,
+    finish_count: AtomicU64,
+    requeue_count: AtomicU64,
+
+    pub_counts: HashMap<String, AtomicU64>,
+
+    channel: Channel,
+}
+
+impl SubscriberV2 {
+    pub fn new(client: ClientV2, mem_msg_rx: Receiver<Message>, channel: Channel) -> Self {
+        // client.nsqd.tracker().spawn(msg_handle(mem_msg_rx.clone()));
+
+        Self {
+            client,
+            mem_msg_rx,
+            ready_count: AtomicI64::new(0),
+            in_flight_count: AtomicI64::new(0),
+            message_count: AtomicU64::new(0),
+            finish_count: AtomicU64::new(0),
+            requeue_count: AtomicU64::new(0),
+            pub_counts: HashMap::new(),
+            channel,
+        }
+    }
+}
+
+#[async_trait]
+impl Client for SubscriberV2 {
+    fn id(&self) -> i64 {
+        self.client.id()
+    }
+
+    fn close(&mut self) {
+        //
+    }
+
+    // TODO: 用户发起订阅后，怎么让这个跑起来？
+    async fn serve(&mut self) {
+        let (read, write) = self.client.stream.split();
+        let mut ticker = time::interval(self.client.heartbeat_interval);
+
+        let mut buf_reader = BufReader::new(read);
+        let mut buf_writer = BufWriter::new(write);
+        loop {
+            select! {
+                f = FrameSub::parse(&mut buf_reader) => match f {
+                    Ok(F) => {},
+                    Err(_) => {},
+                },
+                ret = self.mem_msg_rx.recv() => match ret {
+                    Ok(msg) => {},
+                    Err(_) => {},
+                },
+                _ = ticker.tick() => {
+                    // TODO: 发送完整的心跳包
+                    buf_writer.write(b"_heartbeat_").await;
+                    buf_writer.flush().await;
+                }
+            }
+        }
+    }
+}
+
+impl SubscriberV2 {
     pub fn finished_msg(&mut self) {
         self.finish_count.fetch_add(1, Ordering::SeqCst);
         self.in_flight_count.fetch_sub(1, Ordering::SeqCst);
@@ -181,45 +289,6 @@ impl ClientV2 {
     pub fn timed_out_msg(&mut self) {
         self.in_flight_count.fetch_sub(1, Ordering::SeqCst);
         // TODO: tryUpdateReadyState
-    }
-}
-
-impl Client for ClientV2 {
-    fn id(&self) -> i64 {
-        self.id
-    }
-    fn close(&mut self) {
-        todo!()
-    }
-}
-
-struct IdentifyEvent {
-    output_buffer_timeout: Duration,
-    heartbeat_interval: Duration,
-    sample_rate: i32,
-    msg_timeout: Duration,
-}
-
-pub(super) struct SubscriberV2 {
-    client: ClientV2,
-    mem_msg_rx: async_channel::Receiver<Message>,
-}
-
-impl SubscriberV2 {
-    pub fn new(client: ClientV2, mem_msg_rx: Receiver<Message>) -> Self {
-        client.nsqd.tracker().spawn(msg_handle(mem_msg_rx.clone()));
-
-        Self { client, mem_msg_rx }
-    }
-}
-
-impl Client for SubscriberV2 {
-    fn id(&self) -> i64 {
-        self.client.id()
-    }
-
-    fn close(&mut self) {
-        //
     }
 }
 

@@ -642,6 +642,7 @@ name = "nsq-rs"
 version = "0.1.0"
 dependencies = [
  "async-channel",
+ "async-trait",
  "axum",
  "bytes",
  "dashmap",
