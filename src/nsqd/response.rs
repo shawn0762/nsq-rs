@@ -1,3 +1,10 @@
+use bytes::Bytes;
+use tokio::io::AsyncWriteExt;
+
+use crate::common::Result;
+
+use super::Message;
+
 pub enum Resp {
     Response = 0,
     Error = 1,
@@ -13,7 +20,12 @@ pub enum Resp {
 // size = 4 + N
 
 impl Resp {
-    pub fn new() {
+    pub async fn send<W>(self, msg: Message, writer: &W) -> Result<()>
+    where
+        W: AsyncWriteExt,
+    {
         //
+
+        Ok(())
     }
 }

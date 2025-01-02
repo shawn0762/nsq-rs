@@ -93,10 +93,7 @@ impl Frame {
                 buf.drain(..3);
                 parse_sub(buf)
             }
-            b"TOUCH" => {
-                buf.drain(..5);
-                parse_touch(buf)
-            }
+
             _ => Err(Error::FatalClientErr(
                 "E_BAD_CMD".into(),
                 "Invalid command".into(),
@@ -144,6 +141,10 @@ impl FrameSub {
                 buf.drain(..3);
                 parse_rdy(buf)
             }
+            b"TOUCH" => {
+                buf.drain(..5);
+                parse_touch(buf)
+            }
             _ => Err(Error::FatalClientErr(
                 "E_BAD_CMD".into(),
                 "Invalid command".into(),
@@ -152,7 +153,7 @@ impl FrameSub {
     }
 }
 
-fn parse_touch(buf: Vec<u8>) -> Result<Frame, Error> {
+fn parse_touch(buf: Vec<u8>) -> Result<FrameSub, Error> {
     if buf.len() != MSG_ID_LENGTH {
         return Err(Error::FatalClientErr(
             "E_INVALID".into(),
@@ -161,7 +162,7 @@ fn parse_touch(buf: Vec<u8>) -> Result<Frame, Error> {
     }
     let mut msg_id = [0u8; MSG_ID_LENGTH];
     msg_id.copy_from_slice(&buf[..MSG_ID_LENGTH]);
-    Ok(Frame::TOUCH(msg_id))
+    Ok(FrameSub::TOUCH(msg_id))
 }
 
 fn parse_rdy(buf: Vec<u8>) -> Result<FrameSub, Error> {

@@ -100,6 +100,10 @@ impl Message {
         })
     }
 
+    pub fn len(&self) -> u32 {
+        26 + self.body.len() as u32
+    }
+
     // 将消息写入到后端队列，缓解内存压力
     pub async fn write_to_backend<Q>(&mut self, bq: &mut Q) -> Result<()>
     where

@@ -3,7 +3,7 @@ use std::{
     net::SocketAddr,
     sync::{
         atomic::{AtomicI64, AtomicU64, Ordering},
-        Arc,
+        Arc, Mutex,
     },
     time::{Duration, Instant},
 };
@@ -11,24 +11,21 @@ use std::{
 use async_channel::Receiver;
 use tokio::{
     io::{AsyncWriteExt, BufReader, BufWriter},
-    net::{
-        tcp::{ReadHalf, WriteHalf},
-        TcpStream,
-    },
+    net::TcpStream,
     select,
     sync::{mpsc, oneshot},
-    time::{self, Interval},
+    time::{self},
 };
 
 use crate::nsqd::command::FrameSub;
 
-use super::{channel::Channel, command::Frame, message::Message, nsqd::NSQD, shutdown::Shutdown};
+use super::{channel::Channel, command::Frame, message::Message, nsqd::NSQD};
 use async_trait::async_trait;
 
 const DEFAULT_BUF_SIZE: i32 = 16 * 1024;
 
 #[async_trait]
-pub(super) trait Client {
+pub(super) trait Client: Send + Sync {
     fn id(&self) -> i64;
     fn close(&mut self);
     async fn serve(&mut self);
@@ -42,15 +39,6 @@ pub(super) enum State {
     Closing,
 }
 
-// Client持有TcpStream，所以至少有三个地方需要持有Client，
-// 一是tcp server，需要直接与客户端通信（读写）
-//      所有client：
-//          发送心跳
-//
-//      非订阅client：接收命令、发送响应
-// 一是Channel，需要维护订阅关系（读）
-// 一是需要不断向客户端发送消息，并接收结果（写）
-//      RDY FIN REQ CLS
 pub(super) struct ClientV2 {
     id: i64,
 
@@ -161,7 +149,7 @@ impl Client for ClientV2 {
         let mut buf_writer = BufWriter::new(write);
         loop {
             select! {
-                f = Frame::parse(&mut buf_reader) => match f {
+                ret = Frame::parse(&mut buf_reader) => match ret {
                     Ok(f) => match f {
                         Frame::AUTH(bytes) => todo!(),
                         Frame::PUB(_, bytes) => todo!(),
@@ -195,32 +183,28 @@ pub(super) struct SubscriberV2 {
     client: ClientV2,
     mem_msg_rx: async_channel::Receiver<Message>,
 
-    ready_count: AtomicI64,
-    in_flight_count: AtomicI64,
-    message_count: AtomicU64,
-    finish_count: AtomicU64,
-    requeue_count: AtomicU64,
-
     pub_counts: HashMap<String, AtomicU64>,
 
-    channel: Channel,
+    counter: Arc<Counter>,
 }
 
 impl SubscriberV2 {
-    pub fn new(client: ClientV2, mem_msg_rx: Receiver<Message>, channel: Channel) -> Self {
+    pub fn new(client: ClientV2, mem_msg_rx: Receiver<Message>) -> Self {
         // client.nsqd.tracker().spawn(msg_handle(mem_msg_rx.clone()));
-
+        let counter = Arc::new(Counter::new());
         Self {
             client,
             mem_msg_rx,
-            ready_count: AtomicI64::new(0),
-            in_flight_count: AtomicI64::new(0),
-            message_count: AtomicU64::new(0),
-            finish_count: AtomicU64::new(0),
-            requeue_count: AtomicU64::new(0),
+            counter,
             pub_counts: HashMap::new(),
-            channel,
         }
+    }
+
+    fn send_msg(msg: Message) -> Result<()> {
+        
+        
+
+        Ok(())
     }
 }
 
@@ -243,8 +227,15 @@ impl Client for SubscriberV2 {
         let mut buf_writer = BufWriter::new(write);
         loop {
             select! {
-                f = FrameSub::parse(&mut buf_reader) => match f {
-                    Ok(F) => {},
+                ret = FrameSub::parse(&mut buf_reader) => match ret {
+                    Ok(f) => match f {
+                        FrameSub::CLS => todo!(),
+                        FrameSub::FIN(_) => todo!(),
+                        FrameSub::NOP => todo!(),
+                        FrameSub::RDY(_) => todo!(),
+                        FrameSub::REQ(_, duration) => todo!(),
+                        FrameSub::TOUCH(_) => todo!(),
+                    },
                     Err(_) => {},
                 },
                 ret = self.mem_msg_rx.recv() => match ret {
@@ -261,32 +252,50 @@ impl Client for SubscriberV2 {
     }
 }
 
-impl SubscriberV2 {
-    pub fn finished_msg(&mut self) {
+struct Counter {
+    ready_count: AtomicI64,
+    in_flight_count: AtomicI64,
+    message_count: AtomicU64,
+    finish_count: AtomicU64,
+    requeue_count: AtomicU64,
+}
+
+impl Counter {
+    fn new() -> Self {
+        Self {
+            ready_count: 0.into(),
+            in_flight_count: 0.into(),
+            message_count: 0.into(),
+            finish_count: 0.into(),
+            requeue_count: 0.into(),
+        }
+    }
+
+    pub fn finished_msg(&self) {
         self.finish_count.fetch_add(1, Ordering::SeqCst);
         self.in_flight_count.fetch_sub(1, Ordering::SeqCst);
         // TODO: tryUpdateReadyState
     }
 
-    pub fn published_msg(&mut self, topic: &str, count: u64) {
-        self.pub_counts
-            .get_mut(topic)
-            .unwrap()
-            .fetch_add(count, Ordering::SeqCst);
-    }
+    // pub fn published_msg(&self, topic: &str, count: u64) {
+    //     self.pub_counts
+    //         .get_mut(topic)
+    //         .unwrap()
+    //         .fetch_add(count, Ordering::SeqCst);
+    // }
 
-    pub fn requeue_msg(&mut self) {
+    pub fn requeue_msg(&self) {
         self.requeue_count.fetch_add(1, Ordering::SeqCst);
         self.in_flight_count.fetch_sub(1, Ordering::SeqCst);
         // TODO: tryUpdateReadyState
     }
 
-    pub fn sending_msg(&mut self) {
+    pub fn sending_msg(&self) {
         self.in_flight_count.fetch_add(1, Ordering::SeqCst);
         self.message_count.fetch_add(1, Ordering::SeqCst);
     }
 
-    pub fn timed_out_msg(&mut self) {
+    pub fn timed_out_msg(&self) {
         self.in_flight_count.fetch_sub(1, Ordering::SeqCst);
         // TODO: tryUpdateReadyState
     }
