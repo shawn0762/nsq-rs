@@ -1,6 +1,9 @@
-use std::sync::{
-    atomic::{AtomicBool, AtomicU64, Ordering},
-    Arc,
+use std::{
+    collections::{BinaryHeap, HashMap},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc,
+    },
 };
 
 use dashmap::DashMap;
@@ -15,8 +18,9 @@ use crate::{common::Result, errors::NsqError};
 
 use super::{
     client_v2::{Client, ClientV2, SubscriberV2},
-    message::Message,
+    message::{Message, MsgItem},
     nsqd::NSQD,
+    MessageID,
 };
 
 pub struct Channel {
@@ -35,6 +39,10 @@ pub struct Channel {
 
     exit_flag: AtomicBool,
     task_tracker: TaskTracker,
+
+    // pq stands for priority queue
+    defered_pq: BinaryHeap<MsgItem>,
+    defered_msgs: HashMap<MessageID, MsgItem>,
 }
 
 impl Channel {
@@ -42,7 +50,7 @@ impl Channel {
         name: String,
         nsqd: Arc<NSQD>,
         mut topic_msg_rx: Receiver<Message>,
-        client: impl Client,
+        client: Box<dyn Client>,
     ) -> Self {
         let (mem_msg_tx, mem_msg_rx) = async_channel::bounded(nsqd.get_opts().mem_queue_size);
         let task_tracker = TaskTracker::new();
@@ -57,6 +65,8 @@ impl Channel {
         let clients = DashMap::new();
         clients.insert(client.id(), client);
 
+        let defered_pq = BinaryHeap::new();
+        let defered_msgs = HashMap::new();
         Self {
             name,
             requeue_count: 0.into(),
@@ -68,10 +78,12 @@ impl Channel {
             clients,
             exit_flag,
             task_tracker,
+            defered_pq,
+            defered_msgs,
         }
     }
 
-    pub fn add_client(&mut self, c: Arc<ClientV2>) -> Result<()> {
+    pub fn add_client(&mut self, c: Box<dyn Client>) -> Result<()> {
         // 当客户端开始订阅时，将转换成SucScriber，此后只能进行订阅相关的操作
 
         if self.exiting() {
@@ -89,7 +101,7 @@ impl Channel {
         }
 
         self.clients
-            .insert(id, SubscriberV2::new(c, self.mem_msg_rx.clone()));
+            .insert(id, Box::new(SubscriberV2::new(c, self.mem_msg_rx.clone())));
         Ok(())
     }
 

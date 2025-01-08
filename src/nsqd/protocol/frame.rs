@@ -5,9 +5,12 @@ use lazy_static::lazy_static;
 use regex::bytes::Regex;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 
-use crate::errors::NsqError;
+use crate::{
+    errors::NsqError,
+    nsqd::{message::MSG_ID_LENGTH, MessageID},
+};
 
-use super::{message::MSG_ID_LENGTH, MessageID};
+// use super::{message::MSG_ID_LENGTH, MessageID};
 
 pub enum Error {
     Incomplete,

@@ -200,12 +200,10 @@ impl SubscriberV2 {
         }
     }
 
-    fn send_msg(msg: Message) -> Result<()> {
-        
-        
+    // fn send_msg(msg: Message) -> Result<()> {
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 }
 
 #[async_trait]
@@ -239,7 +237,9 @@ impl Client for SubscriberV2 {
                     Err(_) => {},
                 },
                 ret = self.mem_msg_rx.recv() => match ret {
-                    Ok(msg) => {},
+                    Ok(msg) => {
+                        msg;
+                    },
                     Err(_) => {},
                 },
                 _ = ticker.tick() => {

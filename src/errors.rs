@@ -26,4 +26,7 @@ pub enum NsqError {
 
     #[error("NSQD Disk queue is not implement")]
     DiskQueueNotImplement,
+
+    #[error("{0} {1}")]
+    FatalClientErr(String, String),
 }

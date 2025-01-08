@@ -183,21 +183,21 @@ impl NSQD {
     }
 }
 
-pub fn add_client(
-    nsqd: Arc<NSQD>,
-    topic_name: TopicName,
-    channel_name: ChannelName,
-    c: impl Client,
-) -> Result<()> {
-    let topic = nsqd
-        .topic_map
-        .entry(topic_name.clone())
-        .or_insert_with(move || Topic::new(topic_name, nsqd));
+// pub fn add_client(
+//     nsqd: Arc<NSQD>,
+//     topic_name: TopicName,
+//     channel_name: ChannelName,
+//     c: impl Client,
+// ) -> Result<()> {
+//     let topic = nsqd
+//         .topic_map
+//         .entry(topic_name.clone())
+//         .or_insert_with(move || Topic::new(topic_name, nsqd.clone()));
 
-    topic.add_client();
+//     // topic.add_client();
 
-    Ok(())
-}
+//     Ok(())
+// }
 
 pub enum NotifyType {
     Channel(Channel),

@@ -1,4 +1,5 @@
 use core::time;
+use std::cmp::Reverse;
 use std::time::Instant;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -25,6 +26,7 @@ pub struct Message {
     timestamp: i64,
     attempts: u16,
 
+    // 投递给客户端的时间
     delivery_ts: Option<Instant>,
     client_id: Option<i64>,
     pri: i64,
@@ -117,5 +119,28 @@ impl Message {
         bq.put(buf.as_slice()).await?;
 
         Ok(())
+    }
+}
+
+// For defered messages min-heap
+pub struct MsgItem(Message);
+
+impl Eq for MsgItem {}
+
+impl PartialOrd for MsgItem {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        other.0.pri.partial_cmp(&self.0.pri)
+    }
+}
+
+impl PartialEq for MsgItem {
+    fn eq(&self, other: &Self) -> bool {
+        &self.0.pri == &other.0.pri
+    }
+}
+
+impl Ord for MsgItem {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        other.0.pri.cmp(&self.0.pri)
     }
 }
