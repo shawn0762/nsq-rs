@@ -1,6 +1,6 @@
-use std::usize;
+use std::{mem, str::FromStr, time::Duration, usize};
 
-use bytes::{Buf, Bytes};
+use bytes::{Buf, Bytes, BytesMut};
 use regex::bytes::Regex;
 use tokio_util::codec::{Decoder, Encoder};
 
@@ -38,26 +38,6 @@ impl Decoder for CodecV2 {
     type Error = NsqError;
 
     fn decode(&mut self, src: &mut bytes::BytesMut) -> Result<Option<Self::Item>, Self::Error> {
-        // loop {
-        //     let read_to = src.len();
-        //     match (self.lf_index, self.frame_end_index) {
-        //         (None, None) => {
-        //             let lf_index = src[0..src.len()].iter().position(|b| *b == b'\n');
-        //             if lf_index.is_none() {
-        //                 self.next_index = read_to;
-        //                 return Ok(None);
-        //             };
-
-        //             self.lf_index = lf_index;
-        //             self.next_index = lf_index.unwrap() + 1;
-        //         }
-        //         (Some(_), None) => {}
-        //         (Some(lf_index), Some(frame_end_index)) => {
-        //             //
-        //         }
-        //         _ => {}
-        //     }
-        // }
         if self.frame.is_none() {
             match self.init_frame(src) {
                 Ok(f) if f.is_some() => {
@@ -70,33 +50,32 @@ impl Decoder for CodecV2 {
             };
         }
 
-        let frame = self.frame.take().unwrap();
-
-        match frame {
-            Frame::NOP => Ok(self.frame.take()),
-            Frame::SUB(_, _) => Ok(self.frame.take()),
-            Frame::PUB(topic_name, _) => {
-                if src.len() < 4 {
-                    return Ok(None);
-                }
-                let body_size = u32::from_be_bytes(src[0..4].try_into().unwrap()) as usize;
-
-                if src.len() < body_size + 4 {
+        let ret = match self.frame.as_mut().unwrap() {
+            Frame::NOP => Ok(Some(())),
+            Frame::SUB(_, _) => Ok(Some(())),
+            Frame::PUB(_, bytes) => read_msg_body(src, bytes),
+            Frame::DPUB(_, _, bytes) => read_msg_body(src, bytes),
+            Frame::MPUB(_, vec) => {
+                //
+                if src.len() < 8 {
                     return Ok(None);
                 }
 
-                Ok(Some(Frame::PUB(
-                    topic_name,
-                    bytes::Bytes::copy_from_slice(&src[4..body_size + 4]),
-                )))
+                // 第一个四字节先不管
+
+                let msg_cnt = u32::from_be_bytes(src[4..8].try_into().unwrap()) as usize;
+                for _ in (0..msg_cnt) {}
+
+                Ok(None)
             }
-            Frame::DPUB(_, duration, bytes) => Ok(None),
-            Frame::MPUB(_, vec) => Ok(None),
             Frame::AUTH(bytes) => Ok(None),
-        }
+        };
 
-        // Ok(None)
-        // Ok(self.frame.take())
+        match ret {
+            Ok(Some(_)) => Ok(self.frame.take()),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -123,6 +102,14 @@ impl CodecV2 {
             ),
             (b"PUB", Some(topic_name), None) => {
                 Frame::PUB(try_to_string_name(topic_name)?, bytes::Bytes::new())
+            }
+            (b"DPUB", Some(topic_name), Some(ms_str)) => Frame::DPUB(
+                try_to_string_name(topic_name)?,
+                read_timeout(ms_str.to_vec())?,
+                bytes::Bytes::new(),
+            ),
+            (b"MPUB", Some(topic_name), None) => {
+                Frame::MPUB(try_to_string_name(topic_name)?, Vec::new())
             }
             _ => {
                 src.advance(lf_index + 1);
@@ -163,4 +150,35 @@ fn try_to_string_name(name: &[u8]) -> Result<String, NsqError> {
             format!("PUB topic name {:?} is not valid", name),
         )),
     }
+}
+
+// 从一个数字字符串解析出毫秒数
+fn read_timeout(ms: Vec<u8>) -> Result<Duration, NsqError> {
+    let err = Err(NsqError::FatalClientErr(
+        "E_INVALID".into(),
+        "Invalid message timeout".into(),
+    ));
+
+    let Ok(num_str) = String::from_utf8(ms) else {
+        return err;
+    };
+    let Ok(ms) = num_str.parse::<u64>() else {
+        return err;
+    };
+    Ok(Duration::from_millis(ms))
+}
+
+fn read_msg_body(src: &mut BytesMut, bytes: &mut Bytes) -> Result<Option<()>, NsqError> {
+    if src.len() < 4 {
+        return Ok(None);
+    }
+    // TODO: 这里可能会重复多次执行
+    let body_size = u32::from_be_bytes(src[0..4].try_into().unwrap()) as usize;
+
+    if src.len() < body_size + 4 {
+        return Ok(None);
+    }
+    mem::replace(bytes, bytes::Bytes::copy_from_slice(&src[4..body_size + 4]));
+    src.advance(body_size + 4);
+    Ok(Some(()))
 }
