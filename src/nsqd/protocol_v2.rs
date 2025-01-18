@@ -42,15 +42,15 @@ impl ProtocolV2 {
     pub async fn send_msg(&self, c: &ClientV2, msg: Message) -> Result<()> {
         debug!(
             "PROTOCOL(V2): writing msg({:#?}) to client({:#?}) - {:#?}",
-            msg.id,
+            msg.id(),
             c.addr(),
-            msg.body
+            msg.body()
         );
 
         // TODO:优化Vec的扩容开销
         // TODO:这里发生了多次写入，能不能更直接一点，直接发给用户？
         let mut buf = Vec::new();
-        msg.write_to(&mut buf).await?;
+        msg.put_to(&mut buf).await?;
 
         self.send(c, FrameType::Message, &buf);
 

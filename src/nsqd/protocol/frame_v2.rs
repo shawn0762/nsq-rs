@@ -1,13 +1,13 @@
-use std::{io::Cursor, time::Duration, u64};
+use std::{time::Duration, u64};
 
-use bytes::Bytes;
+use bytes::{BufMut as _, Bytes};
 use lazy_static::lazy_static;
 use regex::bytes::Regex;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt};
 
 use crate::{
     errors::NsqError,
-    nsqd::{message::MSG_ID_LENGTH, MessageID},
+    nsqd::{message::MSG_ID_LENGTH, Message, MessageID},
 };
 
 // use super::{message::MSG_ID_LENGTH, MessageID};
@@ -25,7 +25,8 @@ pub type ChannelName = String;
 pub type Timeout = Duration;
 pub type MsgBody = Bytes;
 
-pub(super) enum Frame {
+/// A Frame represents a request frame command received from client.
+pub enum Frame {
     AUTH(Bytes),
 
     // IDENTIFY(),
@@ -40,18 +41,89 @@ pub(super) enum Frame {
     NOP,
 }
 
-pub(super) enum FrameSub {
+/// A Frame represents a request frame command received from subscribed client.
+pub enum FrameSub {
     CLS, // unsubscribe
     FIN(MessageID),
     NOP,
     // TODO: 配置文件有一个最大值，usize未必合适
-    RDY(usize),
+    RDY(i64),
 
     REQ(MessageID, Timeout),
 
     TOUCH(MessageID),
 }
 
+/// A Resp represents a response frame sending to client.
+pub enum Resp<'a> {
+    Resp(&'a [u8]),
+    Err(&'a [u8]),
+    Msg(Message),
+}
+
+impl<'a> Resp<'a> {
+    pub fn get_code(&self) -> u8 {
+        match self {
+            Resp::Resp(_) => 0,
+            Resp::Err(_) => 1,
+            Resp::Msg(_) => 2,
+        }
+    }
+
+    pub fn get_inner_size(&self) -> i32 {
+        match self {
+            Resp::Resp(body) => body.len() as i32,
+            Resp::Err(body) => body.len() as i32,
+            Resp::Msg(msg) => msg.len(),
+        }
+    }
+
+    pub fn get_size(&self) -> u32 {
+        self.get_inner_size() as u32 + 8
+    }
+
+    pub fn close_wait() -> Self {
+        Self::Resp(b"CLOSE_WAIT")
+    }
+
+    pub fn heartbeat() -> Self {
+        Self::Resp(b"_heartbeat_")
+    }
+
+    pub fn ok() -> Self {
+        Self::Resp(b"OK")
+    }
+
+    /// Put all response bytes into the `dst`.
+    ///
+    /// # Panic
+    /// This fn will panic if there is not enough capacity of `dst`.
+    /// Make sure that you have reserve the `dst` to a suitable capacity before this fn calling.
+    ///
+    /// # Response frame spec
+    ///
+    /// ```plain
+    /// [x][x][x][x][x][x][x][x][x][x][x][x]...
+    /// |  (int32) ||  (int32) || (binary)
+    /// |  4-byte  ||  4-byte  ||  N-byte
+    /// ------------------------------------...
+    ///     size     frame type     body
+    /// size = 4 + N
+    /// ```
+    pub fn put_to(&self, dst: &mut bytes::BytesMut) {
+        let body_size = self.get_inner_size();
+
+        dst.put_u32(body_size as u32 + 4);
+        dst.put_u32(self.get_code().into());
+        match self {
+            Resp::Resp(body) => dst.put(*body),
+            Resp::Err(body) => dst.put(*body),
+            Resp::Msg(msg) => msg.put_to(dst),
+        };
+    }
+}
+
+/*
 impl Frame {
     /// parse frames for client unsubscribed
     pub async fn parse<R>(src: &mut R) -> Result<Self, Error>
@@ -104,6 +176,8 @@ impl Frame {
         }
     }
 }
+
+
 
 impl FrameSub {
     /// parse frames for client subscribing
@@ -181,7 +255,7 @@ fn parse_rdy(buf: Vec<u8>) -> Result<FrameSub, Error> {
     let Ok(count) = num_str.parse::<u64>() else {
         return err;
     };
-    Ok(FrameSub::RDY(count as usize))
+    Ok(FrameSub::RDY(count as i64))
 }
 
 fn parse_fin(buf: Vec<u8>) -> Result<FrameSub, Error> {
@@ -348,3 +422,5 @@ where
     };
     Ok(msg_body.into())
 }
+
+*/

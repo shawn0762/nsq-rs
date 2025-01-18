@@ -24,11 +24,8 @@ use tracing::{debug, info, warn};
 use crate::{common::Result, nsqd::shutdown::Shutdown};
 
 use super::{
-    channel::Channel,
-    client_v2::Client,
-    command::{ChannelName, TopicName},
-    options::Options,
-    topic::Topic,
+    channel::Channel, client_v2::Client, options::Options, protocol::frame_v2::TopicName,
+    topic::Topic, Message,
 };
 
 pub struct NSQD {
@@ -58,7 +55,7 @@ pub struct NSQD {
     // ci,
 
     // golang中这个字段是一个原子类型
-    opts: Options,
+    opts: Arc<Options>,
 
     task_tracker: TaskTracker,
 
@@ -68,13 +65,14 @@ pub struct NSQD {
 
 impl NSQD {
     pub async fn new(opts: Options) -> (Self, CancellationToken) {
+        let opts = Arc::new(opts);
         let token = CancellationToken::new();
         let (notify_tx, notify_rx) = mpsc::channel(1);
 
         let tcp_listener = TcpListener::bind(opts.tcp_addr.clone()).await.unwrap();
 
-        let http_listener = TcpListener::bind(opts.http_addr).await.unwrap();
-        let https_listener = TcpListener::bind(opts.https_addr).await.unwrap();
+        let http_listener = TcpListener::bind(&opts.http_addr).await.unwrap();
+        let https_listener = TcpListener::bind(&opts.https_addr).await.unwrap();
 
         let (shutdown_tx, rx) = broadcast::channel(1);
         let shutdown_rx = Shutdown::new(rx);
@@ -99,6 +97,29 @@ impl NSQD {
         };
 
         (nsqd, token)
+    }
+
+    pub fn publish_msg(&self, topic_name: TopicName, msg: Message) -> Result<()> {
+        if !self.topic_map.contains_key(&topic_name) {
+            self.topic_map.insert(
+                topic_name.clone(),
+                Topic::new(topic_name.clone(), self.opts.clone()),
+            );
+        }
+
+        let mut tp = self.topic_map.get_mut(&topic_name).unwrap();
+
+        tp.put_msg(msg)?;
+
+        // let topic = self.topic_map.get_mut(&topic_name).or_else(|| {
+        //     self.topic_map.entry(
+        //         topic_name).
+        //         Topic::new(topic_name, self.opts.clone()),
+        //     );
+        //     self.topic_map.get_mut(&topic_name)
+        // });
+
+        Ok(())
     }
 
     pub async fn start(&self) -> Result<()> {

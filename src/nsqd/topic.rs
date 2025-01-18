@@ -1,53 +1,60 @@
-use std::{mem, sync::Arc};
+use std::sync::Arc;
 
 use dashmap::DashMap;
-use tokio::{
-    select,
-    sync::broadcast::{self, error::SendError},
-};
+use tokio::sync::broadcast::{self, error::SendError};
 use tokio_util::task::TaskTracker;
-use tracing::{debug, error};
+use tracing::debug;
 
-use crate::{common::Result, errors::NsqError};
+use crate::common::Result;
 
-use super::{channel::Channel, client_v2::Client, message::Message, nsqd::NSQD};
+use super::{channel::Channel, message::Message, options::Options, Client};
 
 pub(super) struct Topic {
     name: String,
 
-    channel_map: Arc<DashMap<String, Channel>>,
+    channel_map: Arc<DashMap<String, Arc<Channel>>>,
 
     // 向所有Channel广播消息
     mem_msg_tx: broadcast::Sender<Message>,
 
-    nsqd: Arc<NSQD>,
+    // nsqd: Arc<NSQD>,
     // exit_tx: async_channel::Sender<()>,
     // exit_rx: async_channel::Receiver<()>,
+    opts: Arc<Options>,
+
+    tracker: TaskTracker,
 }
 
 impl Topic {
-    pub fn new(name: String, nsqd: Arc<NSQD>) -> Self {
-        let (mem_msg_tx, _) = broadcast::channel(nsqd.get_opts().mem_queue_size);
-        let channel_map: Arc<DashMap<String, Channel>> = Arc::new(DashMap::new());
-
+    pub fn new(name: String, opts: Arc<Options>) -> Self {
+        let (mem_msg_tx, _) = broadcast::channel(opts.mem_queue_size);
+        let channel_map = Arc::new(DashMap::new());
+        let tracker = TaskTracker::new();
         Self {
             name,
             channel_map,
             mem_msg_tx,
-            nsqd,
+            opts,
+            tracker,
         }
     }
 
-    pub fn add_channel(&mut self, name: String, client: impl Client) -> Result<()> {
+    pub fn add_channel(&mut self, name: String, client: Client) -> Result<()> {
         if self.channel_map.contains_key(&name) {
             return Ok(());
         }
 
-        self.channel_map.insert(
-            name.clone(),
-            Channel::new(name, self.nsqd.clone(), self.mem_msg_tx.subscribe()),
-        );
+        let channel = Arc::new(Channel::new(name.clone(), self.opts.clone()));
+        channel.add_client(client)?;
 
+        {
+            let channel = channel.clone();
+            let rx = self.mem_msg_tx.subscribe();
+            self.tracker.spawn(async move {
+                channel.serve(rx);
+            });
+        }
+        self.channel_map.insert(name, channel);
         Ok(())
     }
 
@@ -62,8 +69,6 @@ impl Topic {
             c.close();
         }
     }
-
-    async fn msg_pump(&mut self) {}
 
     pub fn put_msg(&mut self, msg: Message) -> Result<()> {
         match self.mem_msg_tx.send(msg) {

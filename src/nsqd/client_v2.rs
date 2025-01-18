@@ -3,33 +3,41 @@ use std::{
     net::SocketAddr,
     sync::{
         atomic::{AtomicI64, AtomicU64, Ordering},
-        Arc, Mutex,
+        Arc,
     },
     time::{Duration, Instant},
 };
 
 use async_channel::Receiver;
+use futures::SinkExt as _;
 use tokio::{
-    io::{AsyncWriteExt, BufReader, BufWriter},
     net::TcpStream,
     select,
     sync::{mpsc, oneshot},
     time::{self},
 };
+use tokio_stream::StreamExt as _;
+use tokio_util::codec::{FramedRead, FramedWrite};
 
-use crate::nsqd::command::FrameSub;
+use crate::nsqd::protocol::frame_v2::{Frame, FrameSub, Resp};
 
-use super::{channel::Channel, command::Frame, message::Message, nsqd::NSQD};
+use super::{
+    channel::Channel,
+    message::Message,
+    nsqd::NSQD,
+    protocol::{codec_sub_v2::CodecSubV2, codec_v2::CodecV2},
+    Client,
+};
 use async_trait::async_trait;
 
 const DEFAULT_BUF_SIZE: i32 = 16 * 1024;
 
-#[async_trait]
-pub(super) trait Client: Send + Sync {
-    fn id(&self) -> i64;
-    fn close(&mut self);
-    async fn serve(&mut self);
-}
+// #[async_trait]
+// pub(super) trait Client: Send + Sync {
+//     fn id(&self) -> i64;
+//     fn close(&mut self);
+//     async fn serve(&mut self);
+// }
 
 pub(super) enum State {
     Init,
@@ -132,40 +140,53 @@ impl ClientV2 {
     }
 }
 
-#[async_trait]
-impl Client for ClientV2 {
-    fn id(&self) -> i64 {
+impl ClientV2 {
+    pub fn id(&self) -> i64 {
         self.id
     }
-    fn close(&mut self) {
+
+    pub fn close(&mut self) {
         todo!()
     }
 
-    async fn serve(&mut self) {
+    pub async fn serve(&mut self) {
         let (read, write) = self.stream.split();
         let mut ticker = time::interval(self.heartbeat_interval);
 
-        let mut buf_reader = BufReader::new(read);
-        let mut buf_writer = BufWriter::new(write);
+        let mut frame_read = FramedRead::new(read, CodecV2::new());
+        let mut framed_write = FramedWrite::new(write, CodecV2::new());
         loop {
             select! {
-                ret = Frame::parse(&mut buf_reader) => match ret {
-                    Ok(f) => match f {
+                ret = frame_read.next() => match ret {
+                    Some(Ok(f)) => match f {
                         Frame::AUTH(bytes) => todo!(),
-                        Frame::PUB(_, bytes) => todo!(),
-                        Frame::DPUB(_, duration, bytes) => todo!(),
-                        Frame::MPUB(_, vec) => todo!(),
+                        Frame::PUB(topic_name, bytes) => {
+                            // Topic由NSQD持有，
+
+                            framed_write.send(Resp::ok()).await;
+                        },
+                        Frame::DPUB(_, duration, bytes) => {
+                            // Topic由NSQD持有，
+
+                            framed_write.send(Resp::ok()).await;
+                        },
+                        Frame::MPUB(_, vec) => {
+
+                            // Topic由NSQD持有，
+                            framed_write.send(Resp::ok()).await;
+                        },
                         Frame::SUB(topic, channel) => {
-                            todo!()
+                            framed_write.send(Resp::ok()).await;
                         },
                         Frame::NOP => todo!(),
                     },
-                    Err(_) => {},
+                    Some(Err(e)) => {
+                        framed_write.send(Resp::Err(e.to_string().as_ref()));
+                    },
+                    None => {},
                 },
                 _ = ticker.tick() => {
-                    // TODO: 发送完整的心跳包
-                    buf_writer.write(b"_heartbeat_").await;
-                    buf_writer.flush().await;
+                    framed_write.send(Resp::heartbeat()).await;
                 }
             }
         }
@@ -189,7 +210,11 @@ pub(super) struct SubscriberV2 {
 }
 
 impl SubscriberV2 {
-    pub fn new(client: ClientV2, mem_msg_rx: Receiver<Message>) -> Self {
+    pub fn new(client: Client, mem_msg_rx: Receiver<Message>) -> Self {
+        let Client::V2(client) = client else {
+            panic!("V2 Client support only");
+        };
+
         // client.nsqd.tracker().spawn(msg_handle(mem_msg_rx.clone()));
         let counter = Arc::new(Counter::new());
         Self {
@@ -206,27 +231,28 @@ impl SubscriberV2 {
     // }
 }
 
-#[async_trait]
-impl Client for SubscriberV2 {
-    fn id(&self) -> i64 {
+impl SubscriberV2 {
+    pub fn id(&self) -> i64 {
         self.client.id()
     }
 
-    fn close(&mut self) {
+    pub fn close(&mut self) {
         //
     }
 
     // TODO: 用户发起订阅后，怎么让这个跑起来？
-    async fn serve(&mut self) {
+    pub async fn serve(&mut self) {
         let (read, write) = self.client.stream.split();
         let mut ticker = time::interval(self.client.heartbeat_interval);
 
-        let mut buf_reader = BufReader::new(read);
-        let mut buf_writer = BufWriter::new(write);
+        // let mut buf_reader = BufReader::new(read);
+        // let mut buf_writer = BufWriter::new(write);
+        let mut framed_read = FramedRead::new(read, CodecSubV2::new());
+        let mut framed_write = FramedWrite::new(write, CodecSubV2::new());
         loop {
             select! {
-                ret = FrameSub::parse(&mut buf_reader) => match ret {
-                    Ok(f) => match f {
+                ret = framed_read.next() => match ret {
+                    Some(Ok(f)) => match f {
                         FrameSub::CLS => todo!(),
                         FrameSub::FIN(_) => todo!(),
                         FrameSub::NOP => todo!(),
@@ -234,18 +260,18 @@ impl Client for SubscriberV2 {
                         FrameSub::REQ(_, duration) => todo!(),
                         FrameSub::TOUCH(_) => todo!(),
                     },
-                    Err(_) => {},
+                    Some(Err(_)) => {},
+                    None => {}
                 },
                 ret = self.mem_msg_rx.recv() => match ret {
                     Ok(msg) => {
-                        msg;
+                        self.counter.sending_msg();
+                        framed_write.send(Resp::Msg(msg)).await;
                     },
                     Err(_) => {},
                 },
                 _ = ticker.tick() => {
-                    // TODO: 发送完整的心跳包
-                    buf_writer.write(b"_heartbeat_").await;
-                    buf_writer.flush().await;
+                    framed_write.send(Resp::heartbeat()).await;
                 }
             }
         }
